@@ -258,6 +258,11 @@ function open(dir = MAP) {
                     fs.writeFileSync(path.join(dir, name), file.data);
                 }
             }
+            // mapdata/*.json is the source of units, items and destructables (objdata-json.js): an
+            // edit to the map's own folder goes there too, or the next import would undo it
+            if (path.resolve(dir) === MAP) {
+                require('./objdata-json').exportJson();
+            }
         },
     };
     return map;

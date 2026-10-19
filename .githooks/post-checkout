@@ -1,0 +1,5 @@
+#!/bin/sh
+# On a branch switch (not a file checkout), rebuild the object-data files from the committed JSON.
+[ "$3" = "1" ] || exit 0
+cd "$(git rev-parse --show-toplevel)"
+node scripts/objdata-json.js import || true

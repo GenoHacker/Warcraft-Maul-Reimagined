@@ -1,0 +1,11 @@
+{
+  "0000": {
+    "_base": "YTpc",
+    "modelFile": "buildings\\other\\CircleOfPower\\CircleOfPower.mdl",
+    "pathingTexture": "PathTextures\\4x4red.tga"
+  },
+  "B000": {
+    "_base": "ITg3",
+    "hitPoints": 8000
+  }
+}

@@ -1,0 +1,12 @@
+#!/bin/sh
+# Keep the host bot able to read the map, and keep object data as JSON (not binary) in git.
+# Runs on every commit: the object-data binaries are not tracked, so a World Editor edit to units or
+# items stages nothing by itself. Git re-reads the index after this hook, so what it stages is committed.
+set -e
+cd "$(git rev-parse --show-toplevel)"
+node scripts/check-w3i.js --fix                 # a World Editor save writes format 39; restore 31
+node scripts/objdata-json.js export             # capture units/items/destructables/doodads as JSON
+git add mapdata
+if ! git diff --cached --quiet -- mapdata; then
+  node scripts/objdata-json.js verify           # fidelity gate: the JSON rebuilds those files exactly
+fi

@@ -95,3 +95,16 @@ config.json
 
 # The 32-bit Lua the unit tests run on (scripts/lua32.sh builds it)
 tools/lua32
+
+# Object data is the source as mapdata/*.json; these binaries are generated (scripts/objdata-json.js)
+maps/map.w3x/war3map.w3u
+maps/map.w3x/war3mapSkin.w3u
+maps/map.w3x/war3map.w3t
+maps/map.w3x/war3mapSkin.w3t
+maps/map.w3x/war3map.w3b
+maps/map.w3x/war3mapSkin.w3b
+maps/map.w3x/war3map.w3d
+maps/map.w3x/war3mapSkin.w3d
+maps/map.w3x/.objdata-stamp.json
+# Built from the archive contents by scripts/build.ts
+maps/map.w3x/war3map.imp
