@@ -461,17 +461,19 @@ export class Commands {
     }
 
     /**
-     * -s / -settings (or .s / .settings) [mode] [difficulty]: the host's game settings in one line,
-     * for host bots and automated tests - the same choice as the host's panel, so only the
-     * detected host, while the game waits for it. Mode: n/normal (classic, the default),
-     * b/blitz, d/debug (no wave progression); difficulty: any whole percentage from 100 to 400
-     * (100 by default), in between too, as a vote can give.
+     * -s / -settings (or .s / .settings) [mode] [vote | difficulty]: the host's game settings in one
+     * line, for host bots and automated tests - the same choice as the host's panel, so only the
+     * detected host, while the game waits for it. Mode: n/normal (classic, the default), b/blitz,
+     * d/debug (no wave progression); then either `v`/`vote` to leave the difficulty to the players
+     * (what MaulBot does by default), or a difficulty: any whole percentage from 100 to 400 (100 by
+     * default), in between too, as a vote can give. `vote` wins if both are given.
      */
     private hostSettings(player: Defender, words: string[]): void {
         const lowest: number = DIFFICULTIES[0];
         const highest: number = DIFFICULTIES[DIFFICULTIES.length - 1];
         let mode: number = GAME_MODES.CLASSIC;
         let difficulty: number = lowest;
+        let letPlayersVote: boolean = false;
         for (const word of words) {
             const percent: number = Number(word);
             if (word === 'n' || word === 'normal') {
@@ -480,14 +482,19 @@ export class Commands {
                 mode = GAME_MODES.BLITZ;
             } else if (word === 'd' || word === 'debug') {
                 mode = GAME_MODES.DEBUG;
+            } else if (word === 'v' || word === 'vote') {
+                letPlayersVote = true;
             } else if (word !== '' && percent === Math.floor(percent) && percent >= lowest && percent <= highest) {
                 difficulty = percent;
             } else if (word !== '') {
-                player.sendMessage(`|cFF999999Usage: -s [n|normal / b|blitz / d|debug] [${lowest}-${highest}]|r`);
+                player.sendMessage(`|cFF999999Usage: -s [n|normal / b|blitz / d|debug] [vote | ${lowest}-${highest}]|r`);
                 return;
             }
         }
-        if (!this.game.diffVote.applyHostChoice(player, mode, difficulty)) {
+        const taken: boolean = letPlayersVote
+            ? this.game.diffVote.applyHostVote(player)
+            : this.game.diffVote.applyHostChoice(player, mode, difficulty);
+        if (!taken) {
             player.sendMessage('|cFF999999Only the host sets the game, while it waits for their choice|r');
         }
     }

@@ -12,6 +12,17 @@ import {HostSettingsPanel} from './Ui/HostSettingsPanel';
 import {Defender} from '../Entity/Players/Defender';
 import {SyncTrace} from '../../lib/SyncTrace';
 import {votedDifficulty} from './DifficultyVote';
+import {Saves} from './Saves';
+
+// The attacker's slot (the creep owner). A host bot sits here, and only here; no normal player can,
+// so settings that come from this slot can never be spoofed by a joiner.
+const ATTACKER_SLOT = 13;
+
+// The host bot's settings file, in CustomMapData on its own machine. Read once the game is up when a
+// human sits in the attacker slot; its -s lines set the game. A fixed, well-known name: the slot-13
+// occupant's battletag is not available in-map (the engine reports the map's slot name there), and
+// the file is local to the bot's own machine, so one name per machine is enough.
+const HOST_FILE = 'WarcraftMaul\\maulbot-host.txt';
 
 // Host detection answers within a second or two; after this the players vote instead
 const HOST_WAIT = 3.00;
@@ -43,6 +54,9 @@ export class Vote {
     private diffVoteOpen: boolean = false;
     public difficulty: number = 0;
     public forceBlitz: boolean = false;
+    // Set once the attacker-slot host bot's settings file has decided the game, so begin() and the
+    // fallback timer leave it alone
+    private fileSettingsDone: boolean = false;
 
     constructor(game: WarcraftMaul) {
         this.game = game;
@@ -55,6 +69,10 @@ export class Vote {
         game.playerSync.on('game-vote', player => this.hostChoseVote(player));
         game.playerSync.on('vote-mode', (player, data) => this.recordModeVote(player, Number(data)));
         game.playerSync.on('vote-diff', (player, data) => this.recordDiffVote(player, Number(data)));
+        // A host bot in the attacker slot can't click the panel; it reads its settings from a file
+        // and syncs the lines. Any player may send on this channel, but applyFileLine takes it only
+        // from the attacker slot.
+        game.playerSync.onAnyPlayer('hostfile', (player, data) => this.applyFileLine(player, data));
 
         Timer.create().start(HOST_WAIT, false, () => this.begin());
     }
@@ -65,12 +83,92 @@ export class Vote {
         for (const player of this.game.players.values()) {
             PanCameraToTimedForPlayer(player.handle, player.getCenterX(), player.getCenterY(), 0.00);
         }
+        // A host bot in the attacker slot (a human there, not the usual computer) sets the game from
+        // a file it alone holds; wait for that before anything else. No bot there: the normal flow.
+        if (GetPlayerController(Player(ATTACKER_SLOT)!) === MAP_CONTROL_USER
+            && GetPlayerSlotState(Player(ATTACKER_SLOT)!) === PLAYER_SLOT_STATE_PLAYING) {
+            this.awaitFileSettings();
+            return;
+        }
         const host = this.game.hostDetection.detected ? this.game.hostDetection.host : undefined;
         const hostDefender = host ? this.game.players.get(host.id) : undefined;
         if (hostDefender) {
             this.askHost(hostDefender);
         } else {
             this.startModeVote();
+        }
+    }
+
+    /**
+     * The attacker-slot host bot sets the game from HOST_FILE (it can't click the panel, and leaves
+     * before the game runs). Only its own machine holds the file, so that client reads it and syncs
+     * each line; every client applies them in applyFileLine. If nothing is applied before the timeout
+     * - no file, an empty one, or the bot is already gone - the players vote, as they would with no
+     * host.
+     */
+    private awaitFileSettings(): void {
+        if (GetLocalPlayer() === Player(ATTACKER_SLOT)!) {
+            const text = Saves.read(HOST_FILE);
+            Log.Info(`hostfile: read ${text.length} chars from ${HOST_FILE}`);
+            Log.flush();
+            for (const line of text.split('\n')) {
+                const trimmed = line.trim();
+                if (trimmed !== '') {
+                    this.game.playerSync.send('hostfile', trimmed);
+                }
+            }
+        }
+        Timer.create().start(HOST_DECISION_TIMEOUT, false, () => {
+            if (!this.fileSettingsDone) {
+                SendMessage('The host left the game to a vote');
+                this.startModeVote();
+            }
+        });
+    }
+
+    /**
+     * One line of the host bot's settings file, an `-s` command, applied once. Taken only from the
+     * attacker slot - a seat no joiner can occupy - so the file can never be spoofed by a player. The
+     * same grammar as the `-s` chat command: a mode, then `vote` to leave the difficulty to the
+     * players, or a difficulty percentage to force it.
+     */
+    private applyFileLine(player: MapPlayer, data: string): void {
+        if (this.fileSettingsDone || player.id !== ATTACKER_SLOT) {
+            return;
+        }
+        let words: string[] = data.toLowerCase().split(' ').filter(word => word !== '');
+        if (words.length > 0 && (words[0] === '-s' || words[0] === '.s'
+            || words[0] === '-settings' || words[0] === '.settings')) {
+            words = words.slice(1);
+        }
+        let mode: number = settings.GAME_MODES.CLASSIC;
+        let difficulty: number = settings.DIFFICULTIES[0];
+        let leaveToVote: boolean = false;
+        const highest: number = settings.DIFFICULTIES[settings.DIFFICULTIES.length - 1];
+        for (const word of words) {
+            const percent: number = Number(word);
+            if (word === 'n' || word === 'normal') {
+                mode = settings.GAME_MODES.CLASSIC;
+            } else if (word === 'b' || word === 'blitz') {
+                mode = settings.GAME_MODES.BLITZ;
+            } else if (word === 'd' || word === 'debug') {
+                mode = settings.GAME_MODES.DEBUG;
+            } else if (word === 'v' || word === 'vote') {
+                leaveToVote = true;
+            } else if (percent === Math.floor(percent)
+                && percent >= settings.DIFFICULTIES[0] && percent <= highest) {
+                difficulty = percent;
+            }
+        }
+        this.fileSettingsDone = true;
+        Log.Info(`hostfile: applied ${leaveToVote ? 'a players vote' : `mode=${mode} difficulty=${difficulty}`}`);
+        Log.flush();
+        if (leaveToVote) {
+            this.startModeVote();
+        } else {
+            this.applyMode(mode);
+            this.applyDifficulty(difficulty);
+            this.openRaceSelection();
         }
     }
 
@@ -115,6 +213,19 @@ export class Vote {
         this.applyMode(mode);
         this.applyDifficulty(difficulty);
         this.openRaceSelection();
+        return true;
+    }
+
+    /**
+     * The host's choice to leave the game to a players' vote - the `-s vote` command, the text form
+     * of the panel's vote button (what MaulBot does by default). Ignored from anyone but the host the
+     * game waits for; returns whether it was taken.
+     */
+    public applyHostVote(player: Defender): boolean {
+        if (!this.awaitingHost || player.id !== this.awaitingHost.id) {
+            return false;
+        }
+        this.hostChoseVote(player);
         return true;
     }
 

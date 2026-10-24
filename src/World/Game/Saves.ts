@@ -192,7 +192,7 @@ export class Saves {
      * carriers' tooltips to LINE_MARK and their letters; it must sit in a preload pass of its own
      * to work once the game is on. The carriers' own tooltips are put back after.
      */
-    private static read(file: string): string {
+    public static read(file: string): string {
         const ids = CARRIERS.map(id => FourCC(id));
         const own = ids.map(id => BlzGetAbilityTooltip(id, 0) ?? '');
         ids.forEach(id => BlzSetAbilityTooltip(id, UNSET, 0));
