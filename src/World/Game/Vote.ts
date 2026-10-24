@@ -24,6 +24,11 @@ const ATTACKER_SLOT = 13;
 // the file is local to the bot's own machine, so one name per machine is enough.
 const HOST_FILE = 'WarcraftMaul\\maulbot-host.txt';
 
+// Written on the attacker-slot host bot's own machine the instant it has read HOST_FILE, so the bot
+// can leave the moment the read is done - it cannot know from a wall-clock timer when loading
+// finished and the in-game read ran. The content is what was read, for the bot to confirm.
+const READ_MARKER = 'WarcraftMaul\\maulbot-read.txt';
+
 // Host detection answers within a second or two; after this the players vote instead
 const HOST_WAIT = 3.00;
 // A host who never confirms must not stall the game
@@ -117,6 +122,7 @@ export class Vote {
                     this.game.playerSync.send('hostfile', trimmed);
                 }
             }
+            Vote.writeReadMarker(text);
         }
         Timer.create().start(HOST_DECISION_TIMEOUT, false, () => {
             if (!this.fileSettingsDone) {
@@ -124,6 +130,15 @@ export class Vote {
                 this.startModeVote();
             }
         });
+    }
+
+    /** Writes READ_MARKER on the local (attacker-slot) machine: the host bot's signal to leave now. */
+    private static writeReadMarker(text: string): void {
+        const [safe] = string.gsub(text, '["\r\n]', ' ');
+        PreloadGenClear();
+        PreloadGenStart();
+        Preload(`read ${text.length} chars: ${safe}`);
+        PreloadGenEnd(READ_MARKER);
     }
 
     /**
