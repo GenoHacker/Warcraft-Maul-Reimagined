@@ -99,31 +99,29 @@ export class Vote {
     private applyHandicapSettings(): boolean {
         const percent: number = R2I(GetPlayerHandicap(Player(ATTACKER_SLOT)!) * 100.00 + 0.50);
         SetPlayerHandicap(Player(ATTACKER_SLOT)!, 1.00);
-        const code: number = 100 - percent;
-        const diffs = settings.DIFFICULTIES;
+        // A 7-bit field, most significant bit first: bit1 (64) players choose, bit2 (32) blitz (else
+        // classic), bit3 (16) difficulty +100, bit4 (8) difficulty +200, bits 5-7 reserved. The
+        // no-host default is 100% = 1100100, which has BOTH choose and blitz set - a combination no
+        // real setting uses - so choose+blitz is the "nothing set" sentinel and the normal flow runs.
+        const choose: boolean = (percent & 64) !== 0;
+        const blitz: boolean = (percent & 32) !== 0;
         let mode: number = settings.GAME_MODES.CLASSIC;
-        let difficulty: number = diffs[0];
+        let difficulty: number = 100;
         let vote: boolean = false;
         let applied: boolean = true;
-        if (code === 1) {
-            vote = true;
-        } else if (code >= 2 && code <= 5) {
-            mode = settings.GAME_MODES.CLASSIC;
-            difficulty = diffs[code - 2];
-        } else if (code >= 6 && code <= 9) {
-            mode = settings.GAME_MODES.BLITZ;
-            difficulty = diffs[code - 6];
-        } else if (code >= 10 && code <= 13) {
-            mode = settings.GAME_MODES.DEBUG;
-            difficulty = diffs[code - 10];
-        } else {
+        if (choose && blitz) {
             applied = false;
+        } else if (choose) {
+            vote = true;
+        } else {
+            mode = blitz ? settings.GAME_MODES.BLITZ : settings.GAME_MODES.CLASSIC;
+            difficulty = 100 + ((percent & 16) !== 0 ? 100 : 0) + ((percent & 8) !== 0 ? 200 : 0);
         }
         const what: string = !applied ? 'default/none' : vote ? 'a players vote' : `mode=${mode} difficulty=${difficulty}`;
-        Log.Info(`handicap: slot ${ATTACKER_SLOT} = ${percent}% (code ${code}) -> ${what}`);
+        Log.Info(`handicap: slot ${ATTACKER_SLOT} = ${percent}% -> ${what}`);
         Log.flush();
         if (this.game.debugMode) {
-            Vote.writeMarker(percent, code, what);
+            Vote.writeMarker(percent, what);
         }
         if (!applied) {
             return false;
@@ -139,10 +137,10 @@ export class Vote {
     }
 
     /** Dev-only: records what the map read from the attacker-slot handicap, to confirm it off-game. */
-    private static writeMarker(percent: number, code: number, what: string): void {
+    private static writeMarker(percent: number, what: string): void {
         PreloadGenClear();
         PreloadGenStart();
-        Preload(`handicap ${percent}% (code ${code}): ${what}`);
+        Preload(`handicap ${percent}%: ${what}`);
         PreloadGenEnd(READ_MARKER);
     }
 
