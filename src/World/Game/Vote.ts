@@ -98,6 +98,9 @@ export class Vote {
      */
     private applyHandicapSettings(): boolean {
         const percent: number = R2I(GetPlayerHandicap(Player(ATTACKER_SLOT)!) * 100.00 + 0.50);
+        // Reset to 100% before any creep spawns, so the engine does not scale the attacker's (NAVY's)
+        // creep HP by the encoded handicap (verified 2026-10-24: a slot-13 unit was 56% HP before
+        // this reset, full after - matching an untouched attacker slot).
         SetPlayerHandicap(Player(ATTACKER_SLOT)!, 1.00);
         // A 7-bit field, most significant bit first: bit1 (64) players choose, bit2 (32) blitz (else
         // classic), bit3 (16) difficulty +100, bit4 (8) difficulty +200, bits 5-7 reserved. The
