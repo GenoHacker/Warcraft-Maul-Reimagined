@@ -40,7 +40,9 @@ export class ObserverSupport {
             `lives=${this.game.gameLives}`,
             `players=${playing.map(p => p.getBattleTag()).join(',')}`,
         ]);
-        if (empty) {
+        // Dev builds keep running with no defender, so the slot-13 (host-bot) path can be developed
+        // solo on one machine (one account in the attacker slot, no players to join). Never in release.
+        if (empty && !this.game.debugMode) {
             this.ended = true;
             EndGame(true);
         }
