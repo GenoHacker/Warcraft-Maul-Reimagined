@@ -12,21 +12,13 @@ import {HostSettingsPanel} from './Ui/HostSettingsPanel';
 import {Defender} from '../Entity/Players/Defender';
 import {SyncTrace} from '../../lib/SyncTrace';
 import {votedDifficulty} from './DifficultyVote';
-import {Saves} from './Saves';
 
 // The attacker's slot (the creep owner). A host bot sits here, and only here; no normal player can,
 // so settings that come from this slot can never be spoofed by a joiner.
 const ATTACKER_SLOT = 13;
 
-// The host bot's settings file, in CustomMapData on its own machine. Read once the game is up when a
-// human sits in the attacker slot; its -s lines set the game. A fixed, well-known name: the slot-13
-// occupant's battletag is not available in-map (the engine reports the map's slot name there), and
-// the file is local to the bot's own machine, so one name per machine is enough.
-const HOST_FILE = 'WarcraftMaul\\maulbot-host.txt';
-
-// Written on the attacker-slot host bot's own machine the instant it has read HOST_FILE, so the bot
-// can leave the moment the read is done - it cannot know from a wall-clock timer when loading
-// finished and the in-game read ran. The content is what was read, for the bot to confirm.
+// Dev-only marker: what the map read from the attacker-slot handicap, so a solo dev run can confirm
+// the decode off-game (CustomMapData on the reading client's machine). Not written in release.
 const READ_MARKER = 'WarcraftMaul\\maulbot-read.txt';
 
 // Host detection answers within a second or two; after this the players vote instead
@@ -59,9 +51,6 @@ export class Vote {
     private diffVoteOpen: boolean = false;
     public difficulty: number = 0;
     public forceBlitz: boolean = false;
-    // Set once the attacker-slot host bot's settings file has decided the game, so begin() and the
-    // fallback timer leave it alone
-    private fileSettingsDone: boolean = false;
 
     constructor(game: WarcraftMaul) {
         this.game = game;
@@ -74,11 +63,6 @@ export class Vote {
         game.playerSync.on('game-vote', player => this.hostChoseVote(player));
         game.playerSync.on('vote-mode', (player, data) => this.recordModeVote(player, Number(data)));
         game.playerSync.on('vote-diff', (player, data) => this.recordDiffVote(player, Number(data)));
-        // A host bot in the attacker slot can't click the panel; it reads its settings from a file
-        // and syncs the lines. Any player may send on this channel, but applyFileLine takes it only
-        // from the attacker slot.
-        game.playerSync.onAnyPlayer('hostfile', (player, data) => this.applyFileLine(player, data));
-
         Timer.create().start(HOST_WAIT, false, () => this.begin());
     }
 
@@ -88,11 +72,10 @@ export class Vote {
         for (const player of this.game.players.values()) {
             PanCameraToTimedForPlayer(player.handle, player.getCenterX(), player.getCenterY(), 0.00);
         }
-        // A host bot in the attacker slot (a human there, not the usual computer) sets the game from
-        // a file it alone holds; wait for that before anything else. No bot there: the normal flow.
-        if (GetPlayerController(Player(ATTACKER_SLOT)!) === MAP_CONTROL_USER
-            && GetPlayerSlotState(Player(ATTACKER_SLOT)!) === PLAYER_SLOT_STATE_PLAYING) {
-            this.awaitFileSettings();
+        // The host bot encodes the game settings in the attacker slot's lobby handicap; the engine
+        // syncs it to every client, so this reads the same value with no bot present in-game. 100% =
+        // nothing set, so the normal flow (host detection / players' vote) runs instead.
+        if (this.applyHandicapSettings()) {
             return;
         }
         const host = this.game.hostDetection.detected ? this.game.hostDetection.host : undefined;
@@ -105,86 +88,62 @@ export class Vote {
     }
 
     /**
-     * The attacker-slot host bot sets the game from HOST_FILE (it can't click the panel, and leaves
-     * before the game runs). Only its own machine holds the file, so that client reads it and syncs
-     * each line; every client applies them in applyFileLine. If nothing is applied before the timeout
-     * - no file, an empty one, or the bot is already gone - the players vote, as they would with no
-     * host.
+     * The host bot sets the game by the handicap it put on the attacker slot in the lobby. The engine
+     * syncs that handicap to every client, so each one reads the same value here with the bot already
+     * gone (it leaves at load) and no in-game message needed. Encoding, as `100 - percent`: 1 a
+     * players' vote; 2-5 classic at 100/200/300/400%; 6-9 blitz; 10-13 debug. 100% (the lobby default,
+     * nothing set) returns false, so the normal flow runs. The handicap is reset to 100% first, so the
+     * engine stops scaling the attacker's (NAVY's) creeps by the encoded value. A dev build records a
+     * marker so the read can be confirmed off-game. Returns whether host settings were applied.
      */
-    private awaitFileSettings(): void {
-        if (GetLocalPlayer() === Player(ATTACKER_SLOT)!) {
-            const text = Saves.read(HOST_FILE);
-            Log.Info(`hostfile: read ${text.length} chars from ${HOST_FILE}`);
-            Log.flush();
-            for (const line of text.split('\n')) {
-                const trimmed = line.trim();
-                if (trimmed !== '') {
-                    this.game.playerSync.send('hostfile', trimmed);
-                }
-            }
-            Vote.writeReadMarker(text);
-        }
-        Timer.create().start(HOST_DECISION_TIMEOUT, false, () => {
-            if (!this.fileSettingsDone) {
-                SendMessage('The host left the game to a vote');
-                this.startModeVote();
-            }
-        });
-    }
-
-    /** Writes READ_MARKER on the local (attacker-slot) machine: the host bot's signal to leave now. */
-    private static writeReadMarker(text: string): void {
-        const [safe] = string.gsub(text, '["\r\n]', ' ');
-        PreloadGenClear();
-        PreloadGenStart();
-        Preload(`read ${text.length} chars: ${safe}`);
-        PreloadGenEnd(READ_MARKER);
-    }
-
-    /**
-     * One line of the host bot's settings file, an `-s` command, applied once. Taken only from the
-     * attacker slot - a seat no joiner can occupy - so the file can never be spoofed by a player. The
-     * same grammar as the `-s` chat command: a mode, then `vote` to leave the difficulty to the
-     * players, or a difficulty percentage to force it.
-     */
-    private applyFileLine(player: MapPlayer, data: string): void {
-        if (this.fileSettingsDone || player.id !== ATTACKER_SLOT) {
-            return;
-        }
-        let words: string[] = data.toLowerCase().split(' ').filter(word => word !== '');
-        if (words.length > 0 && (words[0] === '-s' || words[0] === '.s'
-            || words[0] === '-settings' || words[0] === '.settings')) {
-            words = words.slice(1);
-        }
+    private applyHandicapSettings(): boolean {
+        const percent: number = R2I(GetPlayerHandicap(Player(ATTACKER_SLOT)!) * 100.00 + 0.50);
+        SetPlayerHandicap(Player(ATTACKER_SLOT)!, 1.00);
+        const code: number = 100 - percent;
+        const diffs = settings.DIFFICULTIES;
         let mode: number = settings.GAME_MODES.CLASSIC;
-        let difficulty: number = settings.DIFFICULTIES[0];
-        let leaveToVote: boolean = false;
-        const highest: number = settings.DIFFICULTIES[settings.DIFFICULTIES.length - 1];
-        for (const word of words) {
-            const percent: number = Number(word);
-            if (word === 'n' || word === 'normal') {
-                mode = settings.GAME_MODES.CLASSIC;
-            } else if (word === 'b' || word === 'blitz') {
-                mode = settings.GAME_MODES.BLITZ;
-            } else if (word === 'd' || word === 'debug') {
-                mode = settings.GAME_MODES.DEBUG;
-            } else if (word === 'v' || word === 'vote') {
-                leaveToVote = true;
-            } else if (percent === Math.floor(percent)
-                && percent >= settings.DIFFICULTIES[0] && percent <= highest) {
-                difficulty = percent;
-            }
+        let difficulty: number = diffs[0];
+        let vote: boolean = false;
+        let applied: boolean = true;
+        if (code === 1) {
+            vote = true;
+        } else if (code >= 2 && code <= 5) {
+            mode = settings.GAME_MODES.CLASSIC;
+            difficulty = diffs[code - 2];
+        } else if (code >= 6 && code <= 9) {
+            mode = settings.GAME_MODES.BLITZ;
+            difficulty = diffs[code - 6];
+        } else if (code >= 10 && code <= 13) {
+            mode = settings.GAME_MODES.DEBUG;
+            difficulty = diffs[code - 10];
+        } else {
+            applied = false;
         }
-        this.fileSettingsDone = true;
-        Log.Info(`hostfile: applied ${leaveToVote ? 'a players vote' : `mode=${mode} difficulty=${difficulty}`}`);
+        const what: string = !applied ? 'default/none' : vote ? 'a players vote' : `mode=${mode} difficulty=${difficulty}`;
+        Log.Info(`handicap: slot ${ATTACKER_SLOT} = ${percent}% (code ${code}) -> ${what}`);
         Log.flush();
-        if (leaveToVote) {
+        if (this.game.debugMode) {
+            Vote.writeMarker(percent, code, what);
+        }
+        if (!applied) {
+            return false;
+        }
+        if (vote) {
             this.startModeVote();
         } else {
             this.applyMode(mode);
             this.applyDifficulty(difficulty);
             this.openRaceSelection();
         }
+        return true;
+    }
+
+    /** Dev-only: records what the map read from the attacker-slot handicap, to confirm it off-game. */
+    private static writeMarker(percent: number, code: number, what: string): void {
+        PreloadGenClear();
+        PreloadGenStart();
+        Preload(`handicap ${percent}% (code ${code}): ${what}`);
+        PreloadGenEnd(READ_MARKER);
     }
 
     private askHost(host: Defender): void {
